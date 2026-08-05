@@ -1,0 +1,6 @@
+{
+  "name": "SO Protector",
+  "description": "Android ELF Shared Object (.so) binary packer and runtime protection suite with Python CLI and C loader stubs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
