@@ -6,5 +6,10 @@ build:
 ndk:
   path: null   # auto-detect or specify NDK root path
   ollvm_path: null
+anti_env:
+  enable_root_checks: true
+  enable_emulator_checks: true
+security:
+  enable_whitebox: false
 keys:
   storage_dir: "./keys"
