@@ -1,8 +1,20 @@
-node_modules/
-build/
-dist/
-coverage/
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Build artifacts & temporary files
+build_tmp/
+keys/
+*.enc
+*.o
+*.so
+
+# OS & Logs
 .DS_Store
 *.log
-.env*
-!.env.example
