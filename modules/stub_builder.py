@@ -1,13 +1,12 @@
 """
 modules/stub_builder.py
-Handles string encryption preprocessing pass, whitebox table generation, and compilation of the C loader stub via NDK Clang.
+Handles string encryption preprocessing pass and compilation of the C loader stub via NDK Clang.
 """
 
 import os
 import subprocess
 import shutil
 import re
-from modules.whitebox import generate_whitebox_tables
 
 def encrypt_string_pass(c_source_code: str, key_byte: int = 0x5A) -> str:
     """
@@ -47,20 +46,15 @@ def find_ndk_clang(ndk_path=None):
 def build_stub(enc_blob_path: str, keys_info: dict, protection_level: int, output_path: str, ndk_path: str = None, min_api: int = 21, ollvm_path: str = None, enable_whitebox: bool = False) -> str:
     """
     Preprocesses C loader files, compiles via NDK clang / OLLVM clang, embeds binary payload, and strips output.
+    Raises RuntimeError on subprocess build failures.
     """
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     stub_dir = os.path.join(base_dir, "stub")
     build_dir = os.path.join(base_dir, "build_tmp")
     os.makedirs(build_dir, exist_ok=True)
 
-    # Whitebox lookup tables generation if requested
-    if enable_whitebox:
-        wb_code = generate_whitebox_tables(keys_info["key"])
-        with open(os.path.join(stub_dir, "whitebox_tables.h"), "w", encoding="utf-8") as f:
-            f.write(wb_code)
-
     # 1. Preprocess string encryption in C files
-    c_files = ["loader.c", "anti_debug.c", "anti_hook.c", "anti_env.c"]
+    c_files = ["loader.c", "aes_gcm.c", "zstddeclib.c", "elf_loader.c", "anti_debug.c", "anti_hook.c", "anti_env.c"]
     processed_files = []
 
     for filename in c_files:
@@ -83,19 +77,18 @@ def build_stub(enc_blob_path: str, keys_info: dict, protection_level: int, outpu
     objcopy_tool = shutil.which("aarch64-linux-android-objcopy") or shutil.which("llvm-objcopy") or "objcopy"
     payload_obj = os.path.join(build_dir, "payload.o")
 
-    try:
-        cmd_objcopy = [
-            objcopy_tool,
-            "-I", "binary",
-            "-O", "elf64-littleaarch64",
-            "-B", "aarch64",
-            enc_blob_path,
-            payload_obj
-        ]
-        subprocess.run(cmd_objcopy, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except Exception:
-        with open(payload_obj, "wb") as f:
-            f.write(b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 48)
+    cmd_objcopy = [
+        objcopy_tool,
+        "-I", "binary",
+        "-O", "elf64-littleaarch64",
+        "-B", "aarch64",
+        enc_blob_path,
+        payload_obj
+    ]
+    
+    res_objcopy = subprocess.run(cmd_objcopy, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if res_objcopy.returncode != 0:
+        raise RuntimeError(f"objcopy failed:\n{res_objcopy.stderr.decode('utf-8', errors='replace')}")
 
     # 3. Compiler selection (OLLVM vs NDK Clang)
     if ollvm_path and os.path.exists(ollvm_path):
@@ -118,9 +111,6 @@ def build_stub(enc_blob_path: str, keys_info: dict, protection_level: int, outpu
         "-o", output_path
     ]
 
-    if enable_whitebox:
-        compile_cmd.append("-DENABLE_WHITEBOX_AES=1")
-
     # Apply OLLVM flags to protection files if OLLVM compiler available
     if use_ollvm_flags:
         compile_cmd.extend([
@@ -133,11 +123,11 @@ def build_stub(enc_blob_path: str, keys_info: dict, protection_level: int, outpu
     compile_cmd.extend(processed_files)
     compile_cmd.append(payload_obj)
 
-    try:
-        subprocess.run(compile_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except Exception:
-        with open(output_path, "wb") as f:
-            f.write(b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x00\xb7\x00")
+    res_compile = subprocess.run(compile_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if res_compile.returncode != 0:
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        raise RuntimeError(f"Clang compilation failed:\n{res_compile.stderr.decode('utf-8', errors='replace')}")
 
     # 4. Strip symbols
     strip_tool = shutil.which("llvm-strip") or shutil.which("strip")

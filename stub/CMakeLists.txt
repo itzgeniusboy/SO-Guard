@@ -9,6 +9,9 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(protected_stub SHARED
     loader.c
+    aes_gcm.c
+    zstddeclib.c
+    elf_loader.c
     anti_debug.c
     anti_hook.c
     anti_env.c

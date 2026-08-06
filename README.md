@@ -6,7 +6,7 @@
 
 1. **Compress & Encrypt**: The target `.so` binary is compressed via Zstandard (preset 19) or LZMA and encrypted using AES-256-GCM with a per-build PBKDF2-HMAC-SHA256 derived key and 96-bit nonce.
 2. **Link via `objcopy`**: The encrypted payload is embedded directly into an object file using `ld -b binary` (`_binary_payload_enc_start`), keeping source code free of plaintext arrays.
-3. **In-Memory Loader Stub**: The loader stub (`stub/loader.c`) decrypts payload bytes at runtime into anonymous memory (`mmap` + `mprotect`), executing segment loading without writing decrypted ELF files to disk.
+3. **In-Memory Loader Stub**: The loader stub (`stub/loader.c`) decrypts payload bytes using vendored AES-256-GCM (`stub/aes_gcm.c`), decompresses using vendored Zstandard (`stub/zstddeclib.c`), and executes in-memory ELF parsing & mapping (`stub/elf_loader.c`) without writing decrypted ELF files to disk.
 4. **Anti-Analysis & Environment Threads**: Spawns background threads periodically monitoring `/proc/self/status` `TracerPid`, `ptrace(PTRACE_TRACEME)`, timing delays, open debugger ports, root binaries (`su`, Magisk), QEMU/emulator build props, Frida artifacts (`frida-agent`), stealth threads (`gum-js-loop`, `gmain`), and inotify maps modifications.
 5. **Continuous Integrity Re-Verification**: Spawns a background thread that periodically re-hashes the live `.text` segment against the build-time SHA-256 checksum to detect runtime memory patches or inline hooks.
 
@@ -26,8 +26,6 @@
   - Utilizes `inotify` watches on `/proc/self/maps` and `/proc/self/status` to detect late-injected libraries and gadget hooks.
 - **Continuous Runtime Integrity (`stub/loader.c` & `modules/integrity.py`)**:
   - Periodically re-calculates `.text` section SHA-256 checksum in a dedicated thread to guard against runtime inline patching.
-- **Whitebox AES Key Handling (`modules/whitebox.py`)**:
-  - Optional `--whitebox` flag generates Chow et al. lookup-table whitebox AES transformations, preventing raw key material from existing in plaintext RAM.
 
 ---
 
@@ -41,10 +39,15 @@
 │   ├── packer.py        # Compression & AES-256-GCM encryption
 │   ├── keygen.py         # PBKDF2 key derivation & HWID binding
 │   ├── stub_builder.py   # String encryption, OLLVM integration & NDK compilation
-│   ├── integrity.py      # .text section SHA-256 self-checksum verification
-│   └── whitebox.py       # Chow et al. lookup-table Whitebox AES generator
+│   └── integrity.py      # .text section SHA-256 self-checksum verification
 ├── stub/
 │   ├── loader.c         # Dynamic in-memory payload loader & integrity thread
+│   ├── aes_gcm.c        # Vendored lightweight AES-256-GCM implementation
+│   ├── aes_gcm.h
+│   ├── zstddeclib.c     # Vendored single-file Zstandard decompressor
+│   ├── zstddeclib.h
+│   ├── elf_loader.c     # In-memory ELF64 parser, segment mapper & relocator
+│   ├── elf_loader.h
 │   ├── anti_debug.c     # TracerPid, ptrace, timing, and port scanners
 │   ├── anti_debug.h
 │   ├── anti_hook.c      # Frida stealth threads, inotify maps, & hook checks
@@ -102,14 +105,13 @@ python protect.py keygen --bind-hwid "DEVICE_HWID_ABC123"
 ### 2. Build Protected `.so` Binary (`build`)
 Pack, encrypt, and compile the loader stub with advanced protection options:
 ```bash
-python protect.py build input_lib.so --output protected_lib.so --level 3 --ollvm-path /path/to/ollvm-clang --whitebox
+python protect.py build input_lib.so --output protected_lib.so --level 3 --ollvm-path /path/to/ollvm-clang
 ```
 
 **Options**:
 - `--output`, `-o`: Specify output `.so` filename.
 - `--ndk-path`: Path to NDK toolchain root directory.
 - `--ollvm-path`: Path to OLLVM-patched Clang compiler binary.
-- `--whitebox`: Enable Chow et al. lookup-table Whitebox AES key handling.
 - `--level`, `-l`: Protection level:
   - `1`: Compression + AES-256-GCM encryption only
   - `2`: Level 1 + Anti-debugging & anti-environment background threads
@@ -130,6 +132,7 @@ This protection suite significantly increases the time, effort, and technical sk
 
 However, **it is not unbreakable**:
 - Experienced reverse engineers equipped with custom Android kernels, eBPF dynamic memory inspection, hardware breakpoints, or advanced decompilers (IDA Pro / Ghidra) can dump memory regions after payload decryption occurs in RAM.
+- **Whitebox AES**: True whitebox AES cryptography (e.g., Chow et al. full table network) is not currently implemented in this version and remains planned future work.
 
 ---
 

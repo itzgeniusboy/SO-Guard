@@ -9,7 +9,5 @@ ndk:
 anti_env:
   enable_root_checks: true
   enable_emulator_checks: true
-security:
-  enable_whitebox: false
 keys:
   storage_dir: "./keys"
