@@ -27,21 +27,123 @@ def encrypt_string_pass(c_source_code: str, key_byte: int = 0x5A) -> str:
 
     return re.sub(r'ENC_STR\("([^"]*)"\)', replace_match, c_source_code)
 
-def find_ndk_clang(ndk_path=None):
-    """Locates the aarch64 Android NDK clang compiler binary."""
-    if ndk_path and os.path.exists(ndk_path):
-        clang_path = os.path.join(ndk_path, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", "aarch64-linux-android21-clang")
-        if os.path.exists(clang_path):
-            return clang_path
+import os
+import subprocess
+import shutil
+import re
+import platform
 
-    env_ndk = os.environ.get("ANDROID_NDK_HOME") or os.environ.get("NDK_PATH")
-    if env_ndk and os.path.exists(env_ndk):
-        clang_path = os.path.join(env_ndk, "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", "aarch64-linux-android21-clang")
-        if os.path.exists(clang_path):
-            return clang_path
+def detect_host_platform() -> str:
+    """
+    Detects host platform: 'termux', 'windows', 'darwin', or 'linux'.
+    """
+    prefix = os.environ.get("PREFIX", "")
+    if "com.termux" in prefix or os.path.exists("/data/data/com.termux"):
+        return "termux"
+    
+    sys_name = platform.system()
+    if sys_name == "Windows":
+        return "windows"
+    elif sys_name == "Darwin":
+        return "darwin"
+    else:
+        return "linux"
 
-    which_clang = shutil.which("aarch64-linux-android21-clang") or shutil.which("clang")
-    return which_clang
+def find_ndk_root(ndk_path=None):
+    """Locates the Android NDK root directory if available."""
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    repo_ndk = os.path.join(base_dir, "ndk")
+    
+    candidates = [
+        ndk_path,
+        os.environ.get("ANDROID_NDK_HOME"),
+        os.environ.get("NDK_PATH"),
+        repo_ndk if os.path.exists(repo_ndk) else None
+    ]
+    
+    host_plat = detect_host_platform()
+    if host_plat == "windows":
+        local_appdata = os.environ.get("LOCALAPPDATA", "")
+        if local_appdata:
+            ndk_sdk_dir = os.path.join(local_appdata, "Android", "Sdk", "ndk")
+            if os.path.exists(ndk_sdk_dir):
+                subdirs = [os.path.join(ndk_sdk_dir, d) for d in os.listdir(ndk_sdk_dir)]
+                candidates.extend(sorted(subdirs, reverse=True))
+    elif host_plat in ("linux", "darwin"):
+        home = os.environ.get("HOME", "")
+        if home:
+            ndk_sdk_dir = os.path.join(home, "Android", "Sdk", "ndk")
+            if os.path.exists(ndk_sdk_dir):
+                subdirs = [os.path.join(ndk_sdk_dir, d) for d in os.listdir(ndk_sdk_dir)]
+                candidates.extend(sorted(subdirs, reverse=True))
+
+    for cand in candidates:
+        if cand and os.path.exists(cand):
+            # If cand contains nested directory from unzipping (e.g. android-ndk-r26b)
+            if os.path.exists(os.path.join(cand, "toolchains")):
+                return cand
+            for sub in os.listdir(cand):
+                full_sub = os.path.join(cand, sub)
+                if os.path.isdir(full_sub) and os.path.exists(os.path.join(full_sub, "toolchains")):
+                    return full_sub
+    return None
+
+def find_ndk_clang(ndk_path=None, min_api=21):
+    """
+    Locates the aarch64 compiler binary.
+    Returns tuple (mode, compiler_path) where mode is 'termux-native', 'ndk', or 'system'.
+    """
+    host_plat = detect_host_platform()
+    
+    # 1. Termux detection
+    if host_plat == "termux":
+        clang_bin = shutil.which("clang")
+        if clang_bin:
+            return ("termux-native", clang_bin)
+        return ("termux-missing", None)
+
+    # 2. Windows / Linux / Darwin NDK detection
+    ndk_root = find_ndk_root(ndk_path)
+    if ndk_root:
+        arch_sub = "windows-x86_64" if host_plat == "windows" else ("darwin-x86_64" if host_plat == "darwin" else "linux-x86_64")
+        ext = ".cmd" if host_plat == "windows" else ""
+        
+        # Check specific API target binary first
+        target_clang = os.path.join(ndk_root, "toolchains", "llvm", "prebuilt", arch_sub, "bin", f"aarch64-linux-android{min_api}-clang{ext}")
+        if os.path.exists(target_clang):
+            return ("ndk", target_clang)
+            
+        # Check generic clang binary
+        ext_bin = ".exe" if host_plat == "windows" else ""
+        generic_clang = os.path.join(ndk_root, "toolchains", "llvm", "prebuilt", arch_sub, "bin", f"clang{ext_bin}")
+        if os.path.exists(generic_clang):
+            return ("ndk", generic_clang)
+
+    # 3. Fallback to system clang
+    which_clang = shutil.which(f"aarch64-linux-android{min_api}-clang") or shutil.which("clang")
+    if which_clang:
+        return ("system", which_clang)
+        
+    return ("none", None)
+
+def find_ndk_tool(tool_name: str, ndk_path=None) -> str:
+    """Finds binary tools such as llvm-objcopy or llvm-strip."""
+    host_plat = detect_host_platform()
+    ext = ".exe" if host_plat == "windows" else ""
+    
+    ndk_root = find_ndk_root(ndk_path)
+    if ndk_root:
+        arch_sub = "windows-x86_64" if host_plat == "windows" else ("darwin-x86_64" if host_plat == "darwin" else "linux-x86_64")
+        tool_bin = os.path.join(ndk_root, "toolchains", "llvm", "prebuilt", arch_sub, "bin", f"{tool_name}{ext}")
+        if os.path.exists(tool_bin):
+            return tool_bin
+
+    which_tool = (
+        shutil.which(f"aarch64-linux-android-{tool_name}")
+        or shutil.which(tool_name)
+        or shutil.which(f"llvm-{tool_name}")
+    )
+    return which_tool or tool_name
 
 def build_stub(enc_blob_path: str, keys_info: dict, protection_level: int, output_path: str, ndk_path: str = None, min_api: int = 21, ollvm_path: str = None, enable_whitebox: bool = False) -> str:
     """
