@@ -37,5 +37,7 @@ def generate_build_keys(bind_hwid: str = None, storage_dir: str = "./keys") -> d
         "key": key,
         "nonce": nonce,
         "salt": salt,
+        "passphrase": passphrase,
+        "iterations": 100000,
         "key_file": key_file_path
     }

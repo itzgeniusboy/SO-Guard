@@ -54,8 +54,25 @@ def build_stub(enc_blob_path: str, keys_info: dict, protection_level: int, outpu
     os.makedirs(build_dir, exist_ok=True)
 
     # 1. Preprocess string encryption in C files
-    c_files = ["loader.c", "aes_gcm.c", "zstddeclib.c", "elf_loader.c", "anti_debug.c", "anti_hook.c", "anti_env.c"]
+    c_files = ["loader.c", "aes_gcm.c", "zstddeclib.c", "elf_loader.c", "anti_debug.c", "anti_hook.c", "anti_env.c", "pbkdf2.c"]
     processed_files = []
+
+    # Write build_params.h with build-specific salt, iterations, and passphrase
+    salt_bytes = keys_info.get("salt", b"\x00" * 16)
+    salt_array = ", ".join(f"0x{b:02x}" for b in salt_bytes)
+    passphrase_bytes = keys_info.get("passphrase", b"\x00" * 32)
+    passphrase_array = ", ".join(f"0x{b:02x}" for b in passphrase_bytes)
+    iterations = keys_info.get("iterations", 100000)
+
+    build_params_h = os.path.join(build_dir, "build_params.h")
+    with open(build_params_h, "w", encoding="utf-8") as f:
+        f.write("#ifndef BUILD_PARAMS_H\n#define BUILD_PARAMS_H\n\n")
+        f.write(f"static const unsigned char BUILD_SALT[] = {{{salt_array}}};\n")
+        f.write(f"static const size_t BUILD_SALT_LEN = {len(salt_bytes)};\n")
+        f.write(f"static const unsigned char BUILD_PASSPHRASE[] = {{{passphrase_array}}};\n")
+        f.write(f"static const size_t BUILD_PASSPHRASE_LEN = {len(passphrase_bytes)};\n")
+        f.write(f"static const unsigned int BUILD_ITERATIONS = {iterations};\n\n")
+        f.write("#endif // BUILD_PARAMS_H\n")
 
     for filename in c_files:
         src_file = os.path.join(stub_dir, filename)
@@ -106,6 +123,7 @@ def build_stub(enc_blob_path: str, keys_info: dict, protection_level: int, outpu
         "-shared",
         f"-DPROTECTION_LEVEL={protection_level}",
         f"-I{stub_dir}",
+        f"-I{build_dir}",
         "-O2",
         "-Wall",
         "-o", output_path
